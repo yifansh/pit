@@ -5,10 +5,16 @@ let audioContext;
 const model_url = 'https://cdn.jsdelivr.net/gh/ml5js/ml5-data-and-models/models/pitch-detection/crepe/';
 let freq = 200;
 let charY = 350;
+let ringY;
+let ringRadius = 30;
 const gridSize = 5;
-const minFreq = 261.63;
-const maxFreq = 493.88;
-const ampThreshold = 0.02;
+const minFreq = 130.81;
+const maxFreq = 246.94;
+const ampThreshold = 0.005;
+const maxRingRadius = 100; // 最大サイズを少し大きく
+const minRingRadius = 20;
+const midDB = 60;
+const maxDB = 100;
 let obstacles = [];
 let effects = [];
 let obstacleTimer = 0;
@@ -20,7 +26,9 @@ let currentNote = '';
 let colors = [];
 
 const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-const noteFrequencies = [261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88];
+// const noteFrequencies = [261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88];
+//const noteFrequencies = [130.81, 138.59, 146.83, 155.56, 164.81, 174.61, 185., 196., 207.65, 220., 233.08, 246.94];
+const noteFrequencies = [130.81, 146.83, 164.81, 185., 207.65, 233.08];
 
 let myFont;
 
@@ -30,10 +38,13 @@ function preload() {
 
 function setup() {
   createCanvas(800, 400, WEBGL);
+  angleMode(DEGREES);
+  normalMaterial();
   audioContext = getAudioContext();
   mic = new p5.AudioIn();
   mic.start(startPitch);
   charY = height / 2;
+  ringY = height / 2;
   textFont(myFont);
 }
 
@@ -59,22 +70,25 @@ function draw() {
 
   // don't move unless it's loud enough
   if (vol > ampThreshold)
-    charY = round(y / gridSize) * gridSize;
+    ringY = round(y / gridSize) * gridSize;
+  let dB = 80 + 20 * Math.log10(vol + 0.0001);
+  if (dB <= maxDB) {
+    ringRadius = constrain(map(dB, 0, midDB, minRingRadius, maxRingRadius), minRingRadius, maxRingRadius);
+  }
 
   push();
-  translate(-width / 2 + 100, charY - height / 2, 0);
-  noStroke();
-  fill(0, 255, 150);
-  sphere(20);
-  stroke(0, 255, 200);
-  noFill();
-  ellipse(0, 0, 50, 50);
+  translate(100 - width / 2, ringY - height / 2);
+  stroke(255, 255, 0);
+  // noFill();
+  rotateY(-100);
+  torus(ringRadius, 5);
   pop();
-  
-  if (obstacleTimer > 60) {
+
+  if (obstacleTimer > 120) {
     let noteIndex = int(random(notes.length));
-    let obstacleY = map(noteIndex, 0, notes.length - 1, height - 50, 50);
-    obstacles.push(new Obstacle(width, obstacleY, 100, 20, notes[noteIndex]));
+    let obsY = map(noteIndex, 0, notes.length - 1, height - 50, 50);
+    let obstacle = new Obstacle(width, obsY, 200, 10, random(-1, 1) > 0 ? 0 : (random(-1, 1) > 0 ? random(10, 25) : random(-25, -10)));//, 30, 0.05);
+    obstacles.push(obstacle);
     obstacleTimer = 0;
   }
   obstacleTimer++;
@@ -83,83 +97,110 @@ function draw() {
     let obs = obstacles[i];
     obs.update();
     obs.display();
-    if (dist(100, charY, obs.x, obs.y) < 50) {
+
+    if (obs.collides(100, ringY, ringRadius)) {
       textSize(40);
       fill(255, 0, 0);
-      text("GAME OVER", 100, 100);
+      text("GAME OVER", 0, 0);
       noLoop();
     }
+
     if (obs.x < -obs.w) {
       obstacles.splice(i, 1);
       score += 10 + combo * 2;
       combo++;
-      effects.push(new Effect(100, charY));
+      // effects.push(new Effect(100, charY));
     }
   }
-  
-  for (let i = effects.length - 1; i >= 0; i--) {
-    let e = effects[i];
-    e.update();
-    e.display();
-    if (e.life <= 0) {
-      effects.splice(i, 1);
-    }
-  }
-  
-  fill(255);
+
+  // obstacle.update();
+  // obstacle.display();
+
+  fill(255, 255, 255, 80);
   textSize(20);
-  text("Score: " + score, -width / 2 + 20, -height / 2 + 30);
-  text("Combo: " + combo, -width / 2 + 20, -height / 2 + 60);
-  text("Freq: " + nf(lastFreq,1,2) + " Hz", -width / 2 + 20, -height / 2 + 90);
+  text("Score: " + score, 20, 30);
+  text("Combo: " + combo, 20, 60);
+  text("Freq: " + nf(lastFreq,1,2) + " Hz", 20, 90);
+  text("Vol: " + nf(dB,1,2) + " dB", 20, 120);
+  
+  // for (let i = effects.length - 1; i >= 0; i--) {
+  //   let e = effects[i];
+  //   e.update();
+  //   e.display();
+  //   if (e.life <= 0) {
+  //     effects.splice(i, 1);
+  //   }
+  // }
+  
 }
 
 class Obstacle {
-  constructor(x, y, w, h, lyric) {
+  constructor(x, y, w, h, rot=0) {
     this.x = x;
     this.y = y;
     this.w = w;
     this.h = h;
-    this.speed = 5;
-    this.lyric = lyric;
+    this.xSpeed = 3;
+    this.rot = rot;    // in DEG
+    
+    // this.lyric = lyric;
   }
   
   update() {
-    this.x -= this.speed;
+    this.x -= this.xSpeed;
   }
   
   display() {
     push();
-    translate(this.x - width / 2, this.y - height / 2, 0);
-    stroke(255, 100, 100);
+    translate(this.x - width / 2, this.y - height / 2);
+    stroke(255, 0, 0);
     fill(255, 0, 0, 180);
-    rect(-this.w / 2, -this.h / 2, this.w, this.h);
-    fill(255);
-    textAlign(CENTER, CENTER);
-    textSize(18);
-    text(this.lyric, 0, 0);
+    rotateZ(90 + this.rot);
+    cylinder(10, this.w);
     pop();
+  }
+
+  collides(rX, rY, rR) {
+    // return abs(px - this.x) < this.w / 2 && abs(py - this.y) > pr;
+    return abs(this.x - rX) < this.w / (2 * cos(this.rot))
+        && abs(this.y - (this.x - rX) * tan(this.rot) - rY) > rR;
   }
 }
 
-class Effect {
-  constructor(x, y) {
-    this.x = x;
-    this.y = y;
-    this.size = 20;
-    this.life = 30;
+class SineObstacle extends Obstacle {
+  constructor(x, y, w, h, amp, freq, rot=0) {
+    super(x, y, w, h, rot);
+    this.amp = amp;
+    this.freq = freq;
+    this._y = y;
+    this.xSpeed = 5;
   }
-  
+
   update() {
-    this.size += 3;
-    this.life--;
-  }
-  
-  display() {
-    noFill();
-    stroke(255, 100, 200, this.life * 8);
-    ellipse(this.x - width / 2, this.y - height / 2, this.size, this.size);
+    this.x -= this.xSpeed;
+    this.y = this._y + Math.sin(frameCount * this.freq) * this.amp;
   }
 }
+
+// class Effect {
+//   constructor(x, y) {
+//     this.x = x;
+//     this.y = y;
+//     this.size = 20;
+//     this.life = 30;
+//   }
+  
+//   update() {
+//     this.size += 3;
+//     this.life--;
+//   }
+  
+//   display() {
+//     noFill();
+//     stroke(255, 100, 200, this.life * 8);
+//     ellipse(this.x - width / 2, this.y - height / 2, this.size, this.size);
+//   }
+// }
 
 //Get the pitch, find the closest note and set the fill color
 function getPitch() {
